@@ -1,0 +1,78 @@
+pipeline {
+    agent any
+     tools {
+         jdk 'jdk17'
+         nodejs 'nodejs'
+     }
+     environment {
+         SCANNER_HOME=tool 'sonar-scanner'
+     }
+    stages {
+         stage('clean workspace') {
+            steps {
+                deleteDir() // Delete workspace before starting the pipeline
+            }
+        }
+         stage('Git Clone') {
+            steps {
+              git credentialsId: 'git-creds', url: 'https://github.com/jyoshikanchana/Amazon-Shopping-Mail_Application.git'
+            }
+        }
+        stage('Sonar CA') {
+            steps {
+                script {
+             withSonarQubeEnv('sonar-server') {
+                 sh '''
+                 $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Amazon \
+                 -Dsonar.projectKey=amazon-app
+                 '''
+             }
+            }
+            }
+        }
+		 stage('Quality Gate') {
+		steps {
+			waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token'
+		}
+    }
+        stage('NPM') {
+            steps {
+              sh 'npm install'
+            }
+        }
+       stage('OWASP Dependency-Check Vulnerabilities') {
+           steps {
+               dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'DP-AMAZON' 
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            }
+       } 
+         stage('Trivy File Report') {
+           steps {
+            sh 'trivy fs . > TRIVYFILESCAN.txt'
+            }
+       }
+       stage('docker image build') {
+         steps {
+           script {
+              withDockerRegistry(credentialsId: 'docker-creds', toolName: 'docker') {
+               sh '''
+                 docker build -t amazonapp .
+                 docker tag amazonapp:latest kanchanajyoshi/amazonapp:latest
+                 docker push kanchanajyoshi/amazonapp:latest
+             	 '''
+                }   
+             }
+         }
+       }
+       stage('Trivy Image scan') {
+           steps {
+            sh 'trivy image kanchanajyoshi/amazonapp:latest > TRIVYIMAGESCAN.txt'
+            }
+       }
+stage('Docker run') {
+           steps {
+            sh 'docker run -d -p 3000:3000 kanchanajyoshi/amazonapp:latest'
+            }
+       }
+    }
+}
